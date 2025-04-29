@@ -11,9 +11,34 @@ import dash_bootstrap_components as dbc
 from dash.exceptions import PreventUpdate
 from dotenv import load_dotenv
 from dash.dependencies import ClientsideFunction
+import plotly.graph_objs as go
+
+def compute_area_category_counts(event_ids: list[str], date_str: str) -> dict[str,int]:
+    if not event_ids:
+        return {}
+    csv_str = get_select_311_data(event_ids=",".join(event_ids), event_date="")
+    df_area = pd.read_csv(io.StringIO(csv_str))
+    cols = df_area.columns.tolist()
+    if "reported_issue" in df_area.columns and "total" in df_area.columns:
+        label_col = "reported_issue"
+        value_col = "total"
+    else:
+        label_col, value_col = cols[:2]
+    counts = dict(zip(df_area[label_col], df_area[value_col]))
+    return counts
+
+def compute_area_shot_count(hex_ids: list[str], shots_geojson: dict) -> int:
+    if not hex_ids or not shots_geojson or "features" not in shots_geojson:
+        return 0
+    count = 0
+    for feat in shots_geojson["features"]:
+        lon, lat = feat["geometry"]["coordinates"]
+        cell = h3.latlng_to_cell(lat, lon, 10)
+        if cell in hex_ids:
+            count += 1
+    return count
 
 load_dotenv()
-
 
 class Config:
     APP_VERSION = "0.7.0"
@@ -26,10 +51,7 @@ class Config:
     HEXBIN_WIDTH = 500
     HEXBIN_HEIGHT = 500
 
-
-# Create cache directory if it doesn't exist
 os.makedirs(Config.CACHE_DIR, exist_ok=True)
-
 
 def cache_stale(path, max_age_minutes=30):
     """Check if cached file is older than specified minutes"""
@@ -101,7 +123,6 @@ def stream_to_dataframe(url: str) -> pd.DataFrame:
 
             raise
 
-
 def process_dataframe(df, location_columns=True, date_column=True):
     """Common processing for dataframes with location and date data"""
     df = df.copy()
@@ -115,7 +136,6 @@ def process_dataframe(df, location_columns=True, date_column=True):
         df["month"] = df["date"].dt.to_period("M").dt.to_timestamp()
 
     return df
-
 
 def get_311_data(force_refresh=False):
     """Load 311 data from cache or API"""
@@ -135,82 +155,62 @@ def get_311_data(force_refresh=False):
     df.to_parquet(cache_path, index=False)
     return df
 
-
 def get_select_311_data(event_ids="", event_date=""):
-
     if event_ids:
-        url = f"{Config.API_BASE_URL}/data/query?request=311_summary&category=all&stream=True&app_version={Config.APP_VERSION}&event_ids={event_ids}"
+        id_list = event_ids.split(",")
+        BATCH_SIZE = 50 
+        all_dfs = []
+        
+        for i in range(0, len(id_list), BATCH_SIZE):
+            batch_ids = id_list[i:i + BATCH_SIZE]
+            batch_id_str = ",".join(batch_ids)         
+            url = (
+                f"{Config.API_BASE_URL}/data/query?"
+                f"request=311_summary&category=all&stream=True"
+                f"&app_version={Config.APP_VERSION}"
+                f"&event_ids={batch_id_str}"
+            )
+            
+            try:
+                batch_df = stream_to_dataframe(url)
+                all_dfs.append(batch_df)
+            except Exception as e:
+                continue
+
+        if all_dfs:
+            df = pd.concat(all_dfs, ignore_index=True)
+            if "reported_issue" in df.columns and "total" in df.columns:
+                df = df.groupby("reported_issue", as_index=False)["total"].sum()
+            df.to_csv('311_dash.csv', index=False)
+            return df.to_csv(index=False)
+        else:
+            return ""  
+            
     elif event_date:
-        url = f"{Config.API_BASE_URL}/data/query?request=311_summary&category=all&stream=True&app_version={Config.APP_VERSION}&date={event_date}"
+        url = (
+            f"{Config.API_BASE_URL}/data/query?"
+            f"request=311_summary&category=all&stream=True"
+            f"&app_version={Config.APP_VERSION}"
+            f"&date={event_date}"
+        )
+        
+        df = stream_to_dataframe(url)
+        df.to_csv('311_dash.csv', index=False)
+        return df.to_csv(index=False)
+    else:
+        return ""  
 
-    response_df = stream_to_dataframe(url)
-    reply = response_df.to_csv(index=False)
-
-    return reply
 
 
 def get_shots_fired_data(force_refresh=False):
-    """Load shots fired data and matched homicides from cache or API"""
     cache_path_shots = os.path.join(Config.CACHE_DIR, "df_shots.parquet")
     cache_path_matched = os.path.join(Config.CACHE_DIR, "df_hom_shot_matched.parquet")
 
     if not force_refresh and not cache_stale(cache_path_shots) and not cache_stale(cache_path_matched):
-        print("[CACHE] Using cached shots + matched data")
         df = pd.read_parquet(cache_path_shots)
         df_matched = pd.read_parquet(cache_path_matched)
         return df, df_matched
 
-
-# def get_311_data(force_refresh=False):
-#     """
-#     Always load 311 DataFrame from cache.
-#     Returns the same pd.DataFrame your old version did.
-#     """
-#     cache_path = os.path.join(Config.CACHE_DIR, "df_311.parquet")
-#     if not os.path.exists(cache_path):
-#         raise FileNotFoundError(f"311 cache missing: {cache_path}")
-#     df = pd.read_parquet(cache_path)
-#     return df
-
-
-# def get_shots_fired_data(force_refresh=False):
-#     """
-#     Always load shots-fired and matched-homicides DataFrames from cache.
-#     Returns (df_shots, df_hom_shot_matched) just like before.
-#     """
-#     cache_shots   = os.path.join(Config.CACHE_DIR, "df_shots.parquet")
-#     cache_matched = os.path.join(Config.CACHE_DIR, "df_hom_shot_matched.parquet")
-
-#     missing = [p for p in (cache_shots, cache_matched) if not os.path.exists(p)]
-#     if missing:
-#         raise FileNotFoundError(f"Shots cache missing: {missing}")
-
-#     df_shots           = pd.read_parquet(cache_shots)
-#     df_hom_shot_matched = pd.read_parquet(cache_matched)
-#     return df_shots, df_hom_shot_matched
-
-
-# def get_select_311_data(event_ids="", event_date=""):
-#     """
-#     Load full 311 cache, filter exactly as the summary endpoints did,
-#     then return a CSV string.  Matches your old `reply = ...to_csv(...)`.
-#     """
-#     df = get_311_data()
-
-#     if event_ids:
-#         ids = set(str(i) for i in event_ids.split(",") if i)
-#         df = df[df["id"].astype(str).isin(ids)]
-
-#     elif event_date:
-#         year, month = map(int, event_date.split("-"))
-#         ts = pd.Timestamp(year=year, month=month, day=1)
-#         df = df[df["date"].dt.to_period("M").dt.to_timestamp() == ts]
-
-#     reply = df.to_csv(index=False)
-#     return reply
-
-
-    # Load shots fired data
     print("[LOAD] Fetching shots fired data from API...")
     url = f"{Config.API_BASE_URL}/data/query?app_version={Config.APP_VERSION}&request=911_shots_fired&stream=True"
     df = stream_to_dataframe(url)
@@ -220,7 +220,6 @@ def get_shots_fired_data(force_refresh=False):
     df["day"] = df["date"].dt.date
     df.dropna(subset=["latitude", "longitude", "date"], inplace=True)
 
-    # Load matched homicides data
     print("[LOAD] Fetching matched homicides from API...")
     url_matched = f"{Config.API_BASE_URL}/data/query?app_version={Config.APP_VERSION}&request=911_homicides_and_shots_fired&stream=True"
     df_matched = stream_to_dataframe(url_matched)
@@ -235,7 +234,6 @@ def get_shots_fired_data(force_refresh=False):
 
 df_shots, df_hom_shot_matched = get_shots_fired_data()
 df_311 = get_311_data()
-
 latest = df_311["date"].max()
 max_value = (latest.year - 2018) * 12 + (latest.month - 1)
 
@@ -284,7 +282,6 @@ def date_string_to_year_month(date_string):
 
 
 def get_chat_response(prompt):
-    """Get chat response from API"""
     try:
         headers = {
             "Content-Type": "application/json",
@@ -298,8 +295,6 @@ def get_chat_response(prompt):
 
     return reply
 
-
-# App layout
 app.layout = html.Div(
     [
         html.Div(
@@ -323,6 +318,7 @@ app.layout = html.Div(
             id="overlay",
             className="overlay",
         ),
+        
         html.Div(
             [
                 html.Div(id="before-map", className="map"),
@@ -330,112 +326,153 @@ app.layout = html.Div(
             id="background-container",
         ),
         html.Div([html.H1("Rethink our situation", className="app-header-title")], className="app-header"),
+        
         html.Div(
             [
                 html.Div(
                     [
                         html.Div(
-                            className="chat-messages-wrapper",
-                            children=[
-                                dcc.Loading(
-                                    id="loading-spinner",
-                                    type="circle",
-                                    color="#701238",
-                                    style={
-                                        "position":       "static",   
-                                        "background":     "transparent", 
-                                        "pointerEvents":  "none"      
-                                    },
-                                    children=html.Div(id="chat-messages", className="chat-messages"),
-                                ),
-                                html.Div(id="loading-output", style={"display": "none"}),
-                            ],
-                        ),
-                        html.Div(
                             [
-                                dcc.Input(id="chat-input", type="text", placeholder="What are you trying to understand?", className="chat-input"),
+                                html.Div(id="after-map", className="map"),
+                                dcc.Store(id="hexbin-data-store"),
+                                dcc.Store(id="shots-data-store"),
+                                dcc.Store(id="homicides-data-store"),
+                                dcc.Store(id="selected-hexbins-store", data={"selected_hexbins": [], "selected_ids": []}),
+                                html.Div(
+                                    id="date-display",
+                                    style={"display": "none"},
+                                ),
+                                html.Div(id="dummy-output", style={"display": "none"}),
+                                html.Button(id="map-move-btn", style={"display": "none"}, **{"data-hexids": "", "data-ids": ""}),
                             ],
-                            className="chat-input-container",
+                            id="magnifier-container",
+                            className="map-container",
                         ),
+                        html.Div("December 2024", id="date-slider-value", style={"display": "none"}),
+                        html.Div([html.Div(id="slider")], className="slider-container"),
+                        html.Div([html.Div(id="slider-shadow")], className="slider-container-shadow"),
                     ],
-                    className="chat-main-container",
-                    id="chat-section-left",
+                    id="map-section",
+                    className="center-column map-controls",
                 ),
                 html.Div(
                     [
+                        html.Div(
+                            [
+                                html.Div("By The Numbers", id="stats-tab", className="chat-tab active"),
+                                html.Div("In Our Words", id="community-tab", className="chat-tab"),
+                            ],
+                            className="chat-tabs-container",
+                        ),
+                        
                         html.Div(
                             [
                                 html.Div(
-                                    [
-                                        html.Div(id="after-map", className="map"),
-                                        dcc.Store(id="hexbin-data-store"),
-                                        dcc.Store(id="shots-data-store"),
-                                        dcc.Store(id="homicides-data-store"),
-                                        dcc.Store(id="selected-hexbins-store", data={"selected_hexbins": [], "selected_ids": []}),
+                                    className="chat-messages-wrapper",
+                                    id="stats-chat-container",
+                                    children=[
                                         html.Div(
-                                            id="date-display",
-                                            style={"display": "none"},
+                                            [
+                                                dcc.Graph(
+                                                    id="category-pie-chart",
+                                                    style={"width": "100%", "height": "150px"},
+                                                    config={"displayModeBar": False},
+                                                ),
+                                                
+                                                html.Div(
+                                                    id="shots-count-display",
+                                                    style={
+                                                        "textAlign": "center", 
+                                                        "marginTop": "0.5rem", 
+                                                        "marginBottom": "1rem",
+                                                        "fontSize": "1.0rem",
+                                                        "padding": "0.5rem",
+                                                        "backgroundColor": "rgba(255, 255, 255, 0.95)",
+                                                        "borderRadius": "4px",
+                                                        "position": "relative",
+                                                        "zIndex": "50",
+                                                        "boxShadow": "0 2px 8px rgba(0, 0, 0, 0.15)",
+                                                        "border": "1px solid rgba(112, 39, 69, 0.3)"
+                                                    }
+                                                ),
+                                            ],
+                                            className="stats-visualization-container",
+                                            style={
+                                                "padding": "1rem",
+                                                "backgroundColor": "rgba(255, 255, 255, 0.3)",
+                                                "borderRadius": "8px",
+                                                "marginBottom": "1rem",
+                                                "marginTop": "0.5rem",
+                                                "width": "90%",
+                                                "margin": "0.5rem auto 1rem auto"
+                                            }
                                         ),
-                                        html.Div(id="dummy-output", style={"display": "none"}),
-                                        html.Button(id="map-move-btn", style={"display": "none"}, **{"data-hexids": "", "data-ids": ""}),
+                                        dcc.Loading(
+                                            id="loading-spinner",
+                                            type="circle",
+                                            color="#701238",
+                                            style={"position": "static", "background": "transparent", "pointerEvents": "none"},
+                                            children=html.Div(id="chat-messages", className="chat-messages"),
+                                        ),
+                                        html.Div(id="loading-output", style={"display": "none"}),
                                     ],
-                                    id="magnifier-container",
-                                    className="map-container",
-                                    style={
-                                        # "width": f"{Config.HEXBIN_WIDTH+100}px",
-                                        # "height": f"{Config.HEXBIN_HEIGHT+100}px",
-                                    },
                                 ),
-                                html.Div("December 2024", id="date-slider-value", style={"display": "none"}),
-                                html.Div([html.Div(id="slider")], className="slider-container"),
-                                html.Div([html.Div(id="slider-shadow")], className="slider-container-shadow"),
+                                
+                                html.Div(
+                                    className="chat-messages-wrapper",
+                                    id="community-chat-container",
+                                    style={"display": "none"},
+                                    children=[
+                                        dcc.Loading(
+                                            id="loading-spinner-right",
+                                            type="circle",
+                                            color="#701238",
+                                            style={"position": "static", "background": "transparent", "pointerEvents": "none"},
+                                            children=html.Div(id="chat-messages-right", className="chat-messages"),
+                                        ),
+                                    ],
+                                ),
                             ],
-                            className="map-controls",
-                        ),
-                    ],
-                    id="map-section",
-                    className="map-section-container",
-                ),
-                html.Div(
-                    [
-                        html.Div(
-                            className="chat-messages-wrapper",
-                            children=[
-                                dcc.Loading(
-                                    id="loading-spinner-right",
-                                    type="circle",
-                                    color="#701238",
-                                    style={
-                                        "position":       "static",   
-                                        "background":     "transparent", 
-                                        "pointerEvents":  "none"      
-                                    },
-                                    children=html.Div(id="chat-messages-right", className="chat-messages"),
-                                )
-                            ],
+                            className="chat-content-container",
                         ),
                         html.Div(
                             [
-                                dcc.Input(id="chat-input-right", type="text", placeholder="What are you trying to understand?", className="chat-input"),
-                                html.Button("Tell me more", id="send-button-right", className="send-btn"),
+                                dcc.Input(id="chat-input-combined", type="text", placeholder="What are you trying to understand?", className="chat-input"),
+                                html.Button("Tell me more", id="send-button-combined", className="send-btn"),
                             ],
                             className="chat-input-container",
                         ),
+                        
+                        html.Div([dcc.Input(id="chat-input", type="text", style={"display": "none"})], style={"display": "none"}),
+                        html.Div(
+                            [
+                                dcc.Input(id="chat-input-right", type="text", style={"display": "none"}),
+                                html.Button("", id="send-button-right", style={"display": "none"}),
+                            ],
+                            style={"display": "none"},
+                        ),
                     ],
-                    className="chat-main-container",
                     id="chat-section-right",
+                    className="right-column chat-main-container",
                 ),
             ],
             id="responsive-container",
+            className="two-column-layout", 
         ),
+        
         html.Div(id="scroll-trigger", style={"display": "none"}),
         html.Div(id="hide-overlay-value", style={"display": "none"}),
         dcc.Interval(id="hide-overlay-trigger", interval=1300, n_intervals=0, max_intervals=0),
+        dcc.Store(id="active-tab-store", data="stats"),
         dcc.Store(id="user-message-store"),
         dcc.Store(id="user-message-store-right"),
         dcc.Store(id="window-dimensions", data=json.dumps({"width": 1200, "height": 800})),
-        dcc.Store(id="hexbin-position", data=json.dumps({"top": 115, "right": 35, "width": Config.HEXBIN_WIDTH, "height": Config.HEXBIN_HEIGHT})),
+        dcc.Store(id="hexbin-position", data=json.dumps({"top": 115, "right": 35, "width": 500, "height": 500})),
         dcc.Store(id="current-date-store", data="December 2024"),
+        dcc.Store(id="hexbin-data-store-background"),
+        dcc.Store(id="area-category-counts-store"),
+        dcc.Store(id="area-shot-count-store"),
+        html.Div(id="background-data-applied", style={"display": "none"}),
         html.Div(id="slider-value-display", className="current-date", style={"display": "none"}),
         dcc.Interval(id="initialization-interval", interval=100, max_intervals=1),
         html.Button(id="refresh-chat-btn", style={"display": "none"}),
@@ -449,7 +486,6 @@ app.layout = html.Div(
     className="app-container",
 )
 
-# Initialize the slider when the page loads
 app.clientside_callback(
     ClientsideFunction(namespace="clientside", function_name="initializeSlider"),
     Output("slider", "children"),
@@ -471,7 +507,6 @@ app.clientside_callback(
     prevent_initial_call=True
 )
 
-
 app.clientside_callback(
     ClientsideFunction(namespace="clientside", function_name="updateMapData"),
     Output("dummy-output", "children"),
@@ -480,6 +515,37 @@ app.clientside_callback(
     Input("homicides-data-store", "data"),
 )
 
+app.clientside_callback(
+    """
+    function(backgroundData) {
+        if (!backgroundData) return '';
+        
+        function applyBackgroundData(attempts = 0) {
+            if (attempts >= 10) return;
+            
+            const beforeMap = window.beforeMap;
+            if (!beforeMap || !beforeMap.isStyleLoaded()) {
+                setTimeout(() => applyBackgroundData(attempts + 1), 500);
+                return;
+            }
+            
+            const bgSource = beforeMap.getSource('hexDataBackground');
+            if (bgSource) {
+                bgSource.setData(backgroundData);
+                console.log('Background map data applied with', 
+                    backgroundData.features ? backgroundData.features.length : 0, 'features');
+            } else {
+                setTimeout(() => applyBackgroundData(attempts + 1), 500);
+            }
+        }
+        
+        applyBackgroundData();
+        return '';
+    }
+    """,
+    Output("background-data-applied", "children"),
+    Input("hexbin-data-store-background", "data")
+)
 
 app.clientside_callback(
     """
@@ -501,6 +567,27 @@ app.clientside_callback(
     Input("map-move-btn", "n_clicks"),
 )
 
+app.clientside_callback(
+    """
+    function(messages) {
+        return window.clientside.scrollChat(messages, 'chat-messages');
+    }
+    """,
+    Output("chat-messages", "style", allow_duplicate=True),
+    Input("chat-messages", "children"),
+    prevent_initial_call=True
+)
+
+app.clientside_callback(
+    """
+    function(messages) {
+        return window.clientside.scrollChat(messages, 'chat-messages-right');
+    }
+    """,
+    Output("chat-messages-right", "style", allow_duplicate=True),
+    Input("chat-messages-right", "children"),
+    prevent_initial_call=True
+)
 
 @app.callback(Output("slider-value-display", "children"), Input("date-slider-value", "children"))
 def update_slider_display(date_value):
@@ -565,7 +652,6 @@ def update_map_data(date_value):
 
     return hex_data, shots_data, homicides_data
 
-
 @callback(
     Output("loading-spinner", "style", allow_duplicate=True),
     Input("date-slider-value", "children"),
@@ -574,7 +660,6 @@ def update_map_data(date_value):
 def show_left_spinner_on_slider_change(slider_value):
     return {"display": "block"}
 
-
 @callback(
     [
         Output("chat-messages", "children", allow_duplicate=True),
@@ -582,7 +667,8 @@ def show_left_spinner_on_slider_change(slider_value):
     ],
     [
         Input("user-message-store", "data"),
-        Input("date-slider-value", "children"),
+        Input("current-date-store",    "data"),
+
     ],
     [
         State("chat-messages", "children"),
@@ -607,7 +693,6 @@ def handle_chat_response(stored_input, slider_value, current_messages, selected_
     bot_response = html.Div([dcc.Markdown(reply, dangerously_allow_html=True)], className="bot-message")
     updated_messages = current_messages + [bot_response]
     return updated_messages, {"display": "none"}
-
 
 @callback(
     [
@@ -634,7 +719,6 @@ def handle_chat_input_right(n_clicks, n_submit, input_value, msgs):
     msgs.append(html.Div(input_value, className="user-message"))
     return msgs, "", {"display": "block"}, input_value.strip()
 
-
 @callback(
     Output("loading-spinner-right", "style", allow_duplicate=True),
     Input("date-slider-value", "children"),
@@ -643,10 +727,9 @@ def handle_chat_input_right(n_clicks, n_submit, input_value, msgs):
 def show_right_spinner_on_slider_change(slider_value):
     return {"display": "block"}
 
-
 @callback(
     [Output("chat-messages-right", "children", allow_duplicate=True), Output("loading-spinner-right", "style", allow_duplicate=True)],
-    [Input("user-message-store-right", "data"), Input("date-slider-value", "children")],
+    [Input("user-message-store-right", "data"), Input("current-date-store", "data")],
     [State("chat-messages-right", "children"), State("selected-hexbins-store", "data")],
     prevent_initial_call=True,
 )
@@ -673,8 +756,8 @@ def handle_chat_response_right(stored_input, slider_value, msgs, selected):
     [
         Output("overlay", "style", allow_duplicate=True),
         Output("map-section", "className"),
-        Output("chat-section-left", "className"),
-        Output("chat-input", "autoFocus"),
+        Output("chat-section-right", "className"),
+        Output("chat-input-combined", "autoFocus"),
         Output("tell-me-trigger", "children"),
         Output("hide-overlay-trigger", "max_intervals", allow_duplicate=True),
     ],
@@ -688,17 +771,17 @@ def handle_chat_response_right(stored_input, slider_value, msgs, selected):
 def handle_overlay_buttons(show_clicks, tell_clicks, listen_clicks):
     ctx = dash.callback_context
     if not ctx.triggered:
-        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     button_id = ctx.triggered[0]["prop_id"].split(".")[0]
     overlay_style = {"opacity": "0", "transition": "opacity 1s linear 300ms, opacity 300ms"}
-    map_class = "map-main-container"
+    map_class = "map-controls"
     chat_class = "chat-main-container"
     auto_focus = False
     tell_me_prompt = None
 
     if button_id == "show-me-btn":
-        map_class = "map-main-container focused"
+        map_class = "map-controls focused"
     elif button_id == "tell-me-btn":
         chat_class = "chat-main-container focused"
         tell_me_prompt = "Give me more details about what issues my neighbors are facing today."
@@ -723,7 +806,6 @@ def complete_overlay_transition(n_intervals):
     if n_intervals > 0:
         return {"display": "none"}, 0
     return dash.no_update, dash.no_update
-
 
 @callback(
     [
@@ -757,11 +839,10 @@ def handle_tell_me_prompt(prompt, current_messages):
 
     return updated_messages, "", dash.no_update
 
-
 @callback(
     [Output("chat-messages", "children", allow_duplicate=True), Output("chat-messages-right", "children", allow_duplicate=True)],
     [Input("tell-me-btn", "n_clicks"), Input("selected-hexbins-store", "data")],
-    [State("date-slider-value", "children")],
+    [State("current-date-store", "data"),],
     prevent_initial_call=True,
 )
 def handle_initial_prompts(n_clicks, selected, slider_value):
@@ -790,7 +871,7 @@ def handle_initial_prompts(n_clicks, selected, slider_value):
     stats_reply = get_chat_response(stats_prompt)
     stats_message = html.Div([html.Strong("Statistical overview for your neighborhood:"), dcc.Markdown(stats_reply, dangerously_allow_html=True)], className="bot-message")
 
-    community_prompt = f"Community meeting summary for {selected_date}:{area_context} " "Your neighbor has selected this specific area to focus on. Share neighbor quotes and concerns."
+    community_prompt = f"Community meeting summary for {selected_date}:{area_context} " "Your neighbor has selected this specific area to focus on. Share ONLY qualitative quotes and concerns—do NOT include any statistics or counts."
     community_reply = get_chat_response(community_prompt)
     community_message = html.Div([html.Strong("From recent community meetings:"), dcc.Markdown(community_reply, dangerously_allow_html=True)], className="bot-message")
 
@@ -806,6 +887,202 @@ def update_date_from_slider(n_clicks, date_value):
     if not date_value:
         raise PreventUpdate
     return date_value
+
+@callback(
+    Output("hexbin-data-store-background", "data"),
+    Input("initialization-interval", "n_intervals"),
+)
+def get_all_hexbin_data(_):
+    df_all = df_311.copy()
+    
+    if df_all.empty:
+        return {"type": "FeatureCollection", "features": []}
+
+    resolution = 10
+    hex_to_points = {}
+    for _, row in df_all.iterrows():
+        hex_id = h3.latlng_to_cell(row.latitude, row.longitude, resolution)
+        hex_to_points.setdefault(hex_id, []).append(str(row["id"]))
+
+    max_value = max([len(points) for points in hex_to_points.values()]) if hex_to_points else 1
+    hex_features = []
+    for hex_id, point_ids in hex_to_points.items():
+        boundary = h3.cell_to_boundary(hex_id)
+        coords = [[lng, lat] for lat, lng in boundary] + [[boundary[0][1], boundary[0][0]]]
+        lat_center, lon_center = h3.cell_to_latlng(hex_id)
+        
+        count = len(point_ids)
+        normalized_value = 1 + (count / max_value) * 9  
+        
+        hex_features.append({
+            "type": "Feature", 
+            "id": hex_id, 
+            "properties": {
+                "hex_id": hex_id, 
+                "value": normalized_value,  
+                "count": count,             
+                "lat": lat_center, 
+                "lon": lon_center
+            }, 
+            "geometry": {"type": "Polygon", "coordinates": [coords]}
+        })
+
+    return {"type": "FeatureCollection", "features": hex_features}
+
+@callback(
+    [
+        Output("stats-chat-container", "style"),
+        Output("community-chat-container", "style"),
+        Output("stats-tab", "className"),
+        Output("community-tab", "className"),
+        Output("active-tab-store", "data")
+    ],
+    [
+        Input("stats-tab", "n_clicks"),
+        Input("community-tab", "n_clicks")
+    ],
+    [
+        State("active-tab-store", "data")
+    ],
+    prevent_initial_call=True
+)
+def switch_tabs(stats_clicks, community_clicks, active_tab):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return {"display": "block"}, {"display": "none"}, "chat-tab active", "chat-tab", "stats"
+    
+    button_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    
+    if button_id == "stats-tab":
+        return {"display": "block"}, {"display": "none"}, "chat-tab active", "chat-tab", "stats"
+    else:
+        return {"display": "none"}, {"display": "block"}, "chat-tab", "chat-tab active", "community"
+
+@callback(
+    [
+        Output("chat-input", "value", allow_duplicate=True),
+        Output("chat-input-right", "value", allow_duplicate=True),
+        Output("chat-input-right", "n_submit", allow_duplicate=True),
+        Output("send-button-right", "n_clicks", allow_duplicate=True),
+        Output("loading-spinner", "style", allow_duplicate=True),
+        Output("loading-spinner-right", "style", allow_duplicate=True),
+    ],
+    [
+        Input("send-button-combined", "n_clicks"),
+        Input("chat-input-combined", "n_submit"),
+    ],
+    [
+        State("chat-input-combined", "value"),
+        State("active-tab-store", "data"),
+    ],
+    prevent_initial_call=True,
+)
+def handle_combined_chat_input(n_clicks, n_submit, input_value, active_tab):
+    ctx = dash.callback_context
+    if not ctx.triggered or not input_value or not input_value.strip():
+        raise PreventUpdate
+    
+    left_input = dash.no_update
+    right_input = dash.no_update
+    right_submit = dash.no_update
+    right_clicks = dash.no_update
+    left_loading = {"display": "none"}
+    right_loading = {"display": "none"}
+    
+    if active_tab == "stats":
+        left_input = input_value
+        left_loading = {"display": "block"}
+    else:
+        right_input = input_value
+        right_submit = 1
+        right_clicks = 1
+        right_loading = {"display": "block"}
+    
+    return left_input, right_input, right_submit, right_clicks, left_loading, right_loading
+
+@callback(
+    [
+        Output("chat-input-combined", "value"),
+        Output("chat-input-combined", "placeholder"),
+    ],
+    Input("tell-me-trigger", "children"),
+    prevent_initial_call=True,
+)
+def update_chat_input_from_trigger(trigger_value):
+    if trigger_value:
+        return "", trigger_value
+
+    return dash.no_update, dash.no_update
+
+@callback(
+    Output("area-category-counts-store", "data"),
+    [
+        Input("selected-hexbins-store", "data"),
+        Input("current-date-store",    "data"),
+    ],
+)
+def update_category_counts(selected, date_str):
+    year, month = date_string_to_year_month(date_str)
+    ts = pd.Timestamp(f"{year}-{month:02d}")
+    df_month = df_311[df_311["month"] == ts]
+    ids = selected.get("selected_ids", [])
+    if ids:
+        df_month = df_month[df_month["id"].astype(str).isin(ids)]
+
+    counts = df_month["category"].value_counts().to_dict()
+
+    return counts
+
+
+@callback(
+    Output("area-shot-count-store", "data"),
+    [
+        Input("selected-hexbins-store", "data"),
+        Input("current-date-store",    "data"),
+    ],
+)
+def update_shot_count(selected, date_str):
+    year, month = date_string_to_year_month(date_str)
+    ts = pd.Timestamp(f"{year}-{month:02d}")
+    df_month = df_shots[df_shots["date"].dt.to_period("M").dt.to_timestamp() == ts]
+    hex_ids = selected.get("selected_hexbins", [])
+    if not hex_ids:
+        total = len(df_month)
+        return total
+
+    df_month = df_month.copy()
+    df_month["cell"] = df_month.apply(
+        lambda r: h3.latlng_to_cell(r.latitude, r.longitude, 10), axis=1
+    )
+    count = df_month[df_month["cell"].isin(hex_ids)].shape[0]
+    return count
+
+
+@app.callback(
+    Output("category-pie-chart", "figure"),
+    Input("area-category-counts-store", "data"),
+)
+def render_category_pie(counts):
+    if not counts:
+        return go.Figure(
+            layout={
+                "annotations": [
+                    {"text": "No data", "x":0.5, "y":0.5, "showarrow":False}
+                ]
+            }
+        )
+    labels = list(counts.keys())
+    values = list(counts.values())
+    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4, showlegend=False)])
+    fig.update_layout(margin={"l":0,"r":0,"t":0,"b":0})
+    return fig
+
+@app.callback(
+    Output("shots-count-display", "children"),
+    Input("area-shot-count-store", "data"),
+)
+def render_shots_count(count):
+    return f"Shots fired in area: {count}"
 
 
 server = app.server

@@ -113,36 +113,53 @@
        */
       setupEventHandlers(beforeMap, afterMap) {
         beforeMap.on('move', () => {
-          afterMap.jumpTo({
-            center: beforeMap.getCenter(),
-            zoom: beforeMap.getZoom(),
-            bearing: beforeMap.getBearing(),
-            pitch: beforeMap.getPitch()
-          });
+            afterMap.jumpTo({
+                center: beforeMap.getCenter(),
+                zoom: beforeMap.getZoom(),
+                bearing: beforeMap.getBearing(),
+                pitch: beforeMap.getPitch()
+            });
         });
-
+    
         beforeMap.on('load', () => {
+          // Create a grayscale hexbin layer for background map
           beforeMap.addSource('hexDataBackground', {
-            type: 'geojson',
-            data: { type: 'FeatureCollection', features: [] }
+              type: 'geojson',
+              data: { type: 'FeatureCollection', features: [] }
           });
+          
           beforeMap.addLayer({
-            id: 'hexLayerBackground',
-            type: 'fill',
-            source: 'hexDataBackground',
-            paint: {
-              'fill-color': [
-                'interpolate', ['linear'], ['get', 'value'],
-                0, 'rgba(0,0,0,0)',
-                1, '#eeeeee', 5, '#cccccc', 10, '#999999', 20, '#666666'
-              ],
-              'fill-opacity': 0.5,
-              'fill-outline-color': 'rgba(200,200,200,0.5)'
-            }
+              id: 'hexLayerBackground',
+              type: 'fill',
+              source: 'hexDataBackground',
+              paint: {
+                  'fill-color': [
+                      'interpolate', ['linear'], ['get', 'value'],
+                      0, 'rgba(0,0,0,0)',
+                      1, '#f5f5f5',  // Much lighter gray
+                      3, '#e0e0e0',  // Light gray
+                      5, '#c0c0c0',  // Medium gray
+                      7, '#a0a0a0',  // Darker gray
+                      10, '#808080'  // Darkest gray (but not too dark)
+                  ],
+                  'fill-opacity': 0.6,
+                  'fill-outline-color': 'rgba(200,200,200,0.4)'
+              }
           });
-        });
+          
+          // Try to get background data immediately
+          const bgStore = document.getElementById('hexbin-data-store-background');
+          if (bgStore && bgStore._dashprivate_store && bgStore._dashprivate_store.data) {
+              const bgSource = beforeMap.getSource('hexDataBackground');
+              if (bgSource) {
+                  bgSource.setData(bgStore._dashprivate_store.data);
+                  console.log('Initial background map data applied');
+              }
+          }
+      });
+        
         beforeMap.on('moveend', () => this.handleMapMoveEnd(beforeMap, afterMap));
-      },
+    },
 
       /**
        * Set up data layers on the visualization map
@@ -720,83 +737,74 @@
       return '';
     },
 
-    /**
-     * Update map data sources with new GeoJSON data
-     */
+
     updateMapData: function(hexData, shotsData, homData) {
       console.log("Map update triggered with features:",
           hexData ? (hexData.features ? hexData.features.length : 0) : "no data"
       );
-    
+  
       function tryUpdateMap(attempts = 0) {
-        if (attempts >= 5) {
-          console.error("Failed to update map after multiple attempts");
-          return;
-        }
-    
-        const map = window.afterMap;
-        if (!map || !map.isStyleLoaded()) {
-          console.warn("afterMap or style not ready, retrying...");
-          setTimeout(() => tryUpdateMap(attempts + 1), 500);
-          return;
-        }
-        
-        console.log("Has hex layer?", map.getLayer("hexLayer"));  
+          if (attempts >= 5) {
+              console.error("Failed to update map after multiple attempts");
+              return;
+          }
+  
+          const map = window.afterMap;
+          if (!map || !map.isStyleLoaded()) {
+              console.warn("afterMap or style not ready, retrying...");
+              setTimeout(() => tryUpdateMap(attempts + 1), 500);
+              return;
+          }
+          
+          console.log("Has hex layer?", map.getLayer("hexLayer"));  
+  
+          const ensureSource = (id) => {
+              const source = map.getSource(id);
+              if (!source) {
+                  console.warn(`Source '${id}' missing, setting up layers again`);
+                  if (window.App && App.MapModule && App.MapModule.setupDataLayers) {
+                      App.MapModule.setupDataLayers(map);
+                  }
+                  return map.getSource(id);
+              }
+              return source;
+          };
+  
+          const hexSource = ensureSource("hexData");
+          const shotsSource = ensureSource("shotsData");
+          const homSource = ensureSource("homicidesData");
+  
+          if (!hexSource || !shotsSource || !homSource) {
+              console.warn("Sources still missing, retrying...");
+              setTimeout(() => tryUpdateMap(attempts + 1), 500);
+              return;
+          }
+  
+          try {
+              if (hexData) {
 
-        const ensureSource = (id) => {
-          const source = map.getSource(id);
-          if (!source) {
-            console.warn(`Source '${id}' missing, setting up layers again`);
-            if (window.App && App.MapModule && App.MapModule.setupDataLayers) {
-              App.MapModule.setupDataLayers(map);
-            }
-            return map.getSource(id);
-          }
-          return source;
-        };
-    
-        const hexSource = ensureSource("hexData");
-        const shotsSource = ensureSource("shotsData");
-        const homSource = ensureSource("homicidesData");
-    
-        if (!hexSource || !shotsSource || !homSource) {
-          console.warn("Sources still missing, retrying...");
-          setTimeout(() => tryUpdateMap(attempts + 1), 500);
-          return;
-        }
-    
-        try {
-          if (hexData) {
-            console.log("HexData[0]:", JSON.stringify(hexData.features[0], null, 2));
+                  hexSource.setData(hexData);
+                  console.log("Updated front map hexbin data with", hexData.features.length, "features");
+              }
+              if (shotsData) {
+                  shotsSource.setData(shotsData);
+                  console.log("Updated shots data");
+              }
+              if (homData) {
+                  homSource.setData(homData);
+                  console.log("Updated homicides data");
+              }
+  
 
-            hexSource.setData(hexData);
-            console.log("Updated hexbin data with", hexData.features.length, "features");
+          } catch (err) {
+              console.error("Error updating map sources:", err);
+              setTimeout(() => tryUpdateMap(attempts + 1), 500);
           }
-          if (shotsData) {
-            shotsSource.setData(shotsData);
-            console.log("Updated shots data");
-          }
-          if (homData) {
-            homSource.setData(homData);
-            console.log("Updated homicides data");
-          }
-    
-          if (window.beforeMap && window.beforeMap.isStyleLoaded()) {
-            const bgSource = window.beforeMap.getSource("hexDataBackground");
-            if (bgSource && hexData) {
-              bgSource.setData(hexData);
-              console.log("Updated background map");
-            }
-          }
-        } catch (err) {
-          console.error("Error updating map sources:", err);
-          setTimeout(() => tryUpdateMap(attempts + 1), 500);
-        }
       }
-    
+  
       tryUpdateMap();
       return '';
-    }
+  }
     
   };
 
@@ -821,4 +829,22 @@ window.clientside = {
     if (wrap) { wrap.scrollTop = wrap.scrollHeight; }
     return '';
   },
+};
+
+
+window.clientside = {
+  ...window.clientside,
+  scrollChat: function(messages, containerId) {
+    if (!messages) return {};
+    
+    
+    setTimeout(() => {
+      const chatContainer = document.getElementById(containerId);
+      if (chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+    }, 100);
+    
+    return {};
+  }
 };
