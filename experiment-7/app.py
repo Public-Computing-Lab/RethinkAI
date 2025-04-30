@@ -243,6 +243,57 @@ app = dash.Dash(
     external_scripts=["https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"],
 )
 
+collapsible_style = """
+<style>
+.collapsible-response {
+  margin-bottom: 10px;
+  border-radius: 6px;
+  background-color: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.collapsible-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background-color: #f8f8f8;
+  cursor: pointer;
+  border-left: 4px solid #6AAFDB;
+}
+
+.collapsible-header:hover {
+  background-color: #f0f0f0;
+}
+
+.collapsible-header.expanded {
+  border-left-color: #2C5F8E;
+  background-color: #edf5fa;
+}
+
+.date-label {
+  font-weight: 500;
+  font-size: 14px;
+  color: #333;
+}
+
+.toggle-icon {
+  color: #6AAFDB;
+  font-size: 12px;
+}
+
+.collapsible-content {
+  display: none;
+  padding: 0;
+}
+
+.collapsible-header.expanded + .collapsible-content {
+  display: block;
+  padding: 15px;
+}
+</style>
+"""
+
 
 app.index_string = f"""
 <!DOCTYPE html>
@@ -252,6 +303,7 @@ app.index_string = f"""
         <title>Rethink AI - Boston Pilot</title>
         {{%favicon%}}
         {{%css%}}
+        {collapsible_style}
         <!-- Include Mapbox GL JS and CSS -->
         <script>
             // Make Mapbox token available to client script
@@ -268,6 +320,7 @@ app.index_string = f"""
     </body>
 </html>
 """
+
 
 
 def date_string_to_year_month(date_string):
@@ -387,15 +440,15 @@ app.layout = html.Div(
                                                         "marginBottom": "1rem",
                                                         "fontSize": "1.0rem",
                                                         "padding": "0.5rem",
-                                                        "backgroundColor": "rgba(255, 255, 255, 0.95)",
-                                                        "borderRadius": "4px",
+                                                        "backgroundColor": "transparent",  # Changed from rgba(255, 255, 255, 0.95)
+                                                        "borderRadius": "0",              # Changed from 4px
                                                         "position": "relative",
                                                         "zIndex": "50",
-                                                        "boxShadow": "0 2px 8px rgba(0, 0, 0, 0.15)",
-                                                        "border": "1px solid rgba(112, 39, 69, 0.3)"
+                                                        "boxShadow": "none",              # Changed from 0 2px 8px rgba(0, 0, 0, 0.15)
+                                                        "border": "none"                  # Changed from 1px solid rgba(112, 39, 69, 0.3)
                                                     }
                                                 ),
-                                            ],
+                                                                                            ],
                                             className="stats-visualization-container",
                                             style={
                                                 "padding": "1rem",
@@ -475,7 +528,7 @@ app.layout = html.Div(
         html.Div(id="background-data-applied", style={"display": "none"}),
         html.Div(id="slider-value-display", className="current-date", style={"display": "none"}),
         dcc.Interval(id="initialization-interval", interval=100, max_intervals=1),
-        html.Button(id="refresh-chat-btn", style={"display": "none"}),
+        html.Button(id="refresh-chat-btn", style={"display": "none"}, n_clicks=0),
         html.Button(
             id="update-date-btn", 
             style={"display": "none"}, 
@@ -589,6 +642,62 @@ app.clientside_callback(
     prevent_initial_call=True
 )
 
+app.clientside_callback(
+    """
+    function(n_clicks, current_date) {
+        if (!n_clicks) return;
+        
+        // Find all unprocessed bot messages
+        const botMessages = document.querySelectorAll('.bot-message:not([data-processed="true"])');
+        if (botMessages.length === 0) return;
+        
+        for (let message of botMessages) {
+            try {
+                // Create the collapsible structure
+                const wrapper = document.createElement('div');
+                wrapper.className = 'collapsible-response';
+                
+                const header = document.createElement('div');
+                header.className = 'collapsible-header expanded';
+                header.innerHTML = `<span class="date-label">${current_date}</span><span class="toggle-icon">▼</span>`;
+                
+                // Setup the toggle behavior
+                header.addEventListener('click', function() {
+                    this.classList.toggle('expanded');
+                    this.querySelector('.toggle-icon').textContent = 
+                        this.classList.contains('expanded') ? '▼' : '▶';
+                });
+                
+                // Extract the content from the message
+                const content = document.createElement('div');
+                content.className = 'collapsible-content';
+                
+                // Use innerHTML instead of node manipulation
+                content.innerHTML = message.innerHTML;
+                
+                // Mark as processed
+                message.setAttribute('data-processed', 'true');
+                
+                // Assemble and replace
+                wrapper.appendChild(header);
+                wrapper.appendChild(content);
+                
+                message.innerHTML = '';
+                message.appendChild(wrapper);
+                
+            } catch (err) {
+                console.error("Error creating collapsible:", err);
+            }
+        }
+        
+        return '';
+    }
+    """,
+    Output("loading-output", "children"),
+    [Input("refresh-chat-btn", "n_clicks")],
+    [State("current-date-store", "data")]
+)
+
 @app.callback(Output("slider-value-display", "children"), Input("date-slider-value", "children"))
 def update_slider_display(date_value):
     return date_value
@@ -664,19 +773,20 @@ def show_left_spinner_on_slider_change(slider_value):
     [
         Output("chat-messages", "children", allow_duplicate=True),
         Output("loading-spinner", "style", allow_duplicate=True),
+        Output("refresh-chat-btn", "n_clicks", allow_duplicate=True),  # Add this output
     ],
     [
         Input("user-message-store", "data"),
-        Input("current-date-store",    "data"),
-
+        Input("current-date-store", "data"),
     ],
     [
         State("chat-messages", "children"),
         State("selected-hexbins-store", "data"),
+        State("refresh-chat-btn", "n_clicks"),  # Add this state
     ],
     prevent_initial_call=True,
 )
-def handle_chat_response(stored_input, slider_value, current_messages, selected_hexbins_data):
+def handle_chat_response(stored_input, slider_value, current_messages, selected_hexbins_data, refresh_clicks):
 
     current_messages = current_messages or []
     year, month = date_string_to_year_month(slider_value)
@@ -692,7 +802,9 @@ def handle_chat_response(stored_input, slider_value, current_messages, selected_
     reply = get_chat_response(prompt)
     bot_response = html.Div([dcc.Markdown(reply, dangerously_allow_html=True)], className="bot-message")
     updated_messages = current_messages + [bot_response]
-    return updated_messages, {"display": "none"}
+    refresh_clicks = 0 if refresh_clicks is None else refresh_clicks + 1
+    
+    return updated_messages, {"display": "none"}, refresh_clicks
 
 @callback(
     [
@@ -728,12 +840,23 @@ def show_right_spinner_on_slider_change(slider_value):
     return {"display": "block"}
 
 @callback(
-    [Output("chat-messages-right", "children", allow_duplicate=True), Output("loading-spinner-right", "style", allow_duplicate=True)],
-    [Input("user-message-store-right", "data"), Input("current-date-store", "data")],
-    [State("chat-messages-right", "children"), State("selected-hexbins-store", "data")],
+    [
+        Output("chat-messages-right", "children", allow_duplicate=True), 
+        Output("loading-spinner-right", "style", allow_duplicate=True),
+        Output("refresh-chat-btn", "n_clicks", allow_duplicate=True),  # Add this output
+    ],
+    [
+        Input("user-message-store-right", "data"), 
+        Input("current-date-store", "data")
+    ],
+    [
+        State("chat-messages-right", "children"), 
+        State("selected-hexbins-store", "data"),
+        State("refresh-chat-btn", "n_clicks"),  # Add this state
+    ],
     prevent_initial_call=True,
 )
-def handle_chat_response_right(stored_input, slider_value, msgs, selected):
+def handle_chat_response_right(stored_input, slider_value, msgs, selected, refresh_clicks):
     msgs = msgs or []
 
     year, month = date_string_to_year_month(slider_value)
@@ -749,7 +872,9 @@ def handle_chat_response_right(stored_input, slider_value, msgs, selected):
 
     msgs.append(html.Div(dcc.Markdown(reply, dangerously_allow_html=True), className="bot-message"))
 
-    return msgs, {"display": "none"}
+    refresh_clicks = 0 if refresh_clicks is None else refresh_clicks + 1
+
+    return msgs, {"display": "none"}, refresh_clicks
 
 
 @callback(
@@ -812,16 +937,19 @@ def complete_overlay_transition(n_intervals):
         Output("chat-messages", "children", allow_duplicate=True),
         Output("chat-input", "value", allow_duplicate=True),
         Output("loading-output", "children", allow_duplicate=True),
+        Output("refresh-chat-btn", "n_clicks", allow_duplicate=True),  # Add this output
     ],
     [
         Input("tell-me-trigger", "children"),
     ],
     [
         State("chat-messages", "children"),
+        State("refresh-chat-btn", "n_clicks"),  # Add this state
     ],
     prevent_initial_call=True,
 )
-def handle_tell_me_prompt(prompt, current_messages):
+def handle_tell_me_prompt(prompt, current_messages, refresh_clicks):
+
     if not prompt:
         raise PreventUpdate
 
@@ -837,15 +965,27 @@ def handle_tell_me_prompt(prompt, current_messages):
     )
     updated_messages = current_messages + [bot_response]
 
-    return updated_messages, "", dash.no_update
+    refresh_clicks = 0 if refresh_clicks is None else refresh_clicks + 1
+
+    return updated_messages, "", dash.no_update, refresh_clicks
 
 @callback(
-    [Output("chat-messages", "children", allow_duplicate=True), Output("chat-messages-right", "children", allow_duplicate=True)],
-    [Input("tell-me-btn", "n_clicks"), Input("selected-hexbins-store", "data")],
-    [State("current-date-store", "data"),],
+    [
+        Output("chat-messages", "children", allow_duplicate=True), 
+        Output("chat-messages-right", "children", allow_duplicate=True),
+        Output("refresh-chat-btn", "n_clicks", allow_duplicate=True),  # Add this output
+    ],
+    [
+        Input("tell-me-btn", "n_clicks"), 
+        Input("selected-hexbins-store", "data")
+    ],
+    [
+        State("current-date-store", "data"),
+        State("refresh-chat-btn", "n_clicks"),  # Add this state
+    ],
     prevent_initial_call=True,
 )
-def handle_initial_prompts(n_clicks, selected, slider_value):
+def handle_initial_prompts(n_clicks, selected, slider_value, refresh_clicks):
 
     if not n_clicks:
         raise PreventUpdate
@@ -875,7 +1015,9 @@ def handle_initial_prompts(n_clicks, selected, slider_value):
     community_reply = get_chat_response(community_prompt)
     community_message = html.Div([html.Strong("From recent community meetings:"), dcc.Markdown(community_reply, dangerously_allow_html=True)], className="bot-message")
 
-    return [stats_message], [community_message]
+    refresh_clicks = 0 if refresh_clicks is None else refresh_clicks + 1
+
+    return [stats_message], [community_message], refresh_clicks
 
 @callback(
     Output("date-slider-value", "children"),
@@ -1073,7 +1215,18 @@ def render_category_pie(counts):
         )
     labels = list(counts.keys())
     values = list(counts.values())
-    fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=0.4, showlegend=False)])
+    
+    # Custom color palette with light orange, sky blue, grey, and darker blue
+    custom_colors = ['#FFA95A', '#6AAFDB', '#A9A9A9', '#2C5F8E']
+    
+    fig = go.Figure(data=[go.Pie(
+        labels=labels, 
+        values=values, 
+        hole=0.4, 
+        showlegend=False,
+        marker=dict(colors=custom_colors)
+    )])
+    
     fig.update_layout(margin={"l":0,"r":0,"t":0,"b":0})
     return fig
 
@@ -1082,7 +1235,11 @@ def render_category_pie(counts):
     Input("area-shot-count-store", "data"),
 )
 def render_shots_count(count):
-    return f"Shots fired in area: {count}"
+    # Using HTML to create a small dot followed by the text
+    return html.Span([
+        html.Span("•", style={"color": "#701238", "fontSize": "30px", "marginRight": "5px"}),
+        f" {count}"
+    ])
 
 
 server = app.server
