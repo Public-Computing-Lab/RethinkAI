@@ -1,6 +1,6 @@
 (function() {
   'use strict';
-  
+
   window.updateMapWithDate = function(dateString) {
     console.log(" Direct update attempt for date:", dateString);
     const updateBtn = document.getElementById('update-date-btn');
@@ -20,15 +20,16 @@
       mapbox: {
         token: window.MAPBOX_TOKEN,
         initialCenter: [-71.07601, 42.28988],
-        initialZoom: 13
+        backgroundInitialZoom: 12,
+        magnifiedInitialZoom: 13
       },
       slider: {
         center: { x: 300, y: 300 },
         radius: 270,
         startAngle: 135,
         endAngle: 225,
-        startDate: new Date(2018, 0), 
-        endDate: new Date(2024, 11) 
+        startDate: new Date(2018, 0),
+        endDate: new Date(2024, 11)
       },
       debounceTime: 3000,
       refreshChatDelay: 500
@@ -71,7 +72,7 @@
           container: 'before-map',
           style: 'mapbox://styles/mapbox/light-v11',
           center: config.initialCenter,
-          zoom: config.initialZoom,
+          zoom: config.backgroundInitialZoom,
           interactive: true,
         });
         App.state.maps.before = beforeMap;
@@ -81,22 +82,22 @@
           container: 'after-map',
           style: 'mapbox://styles/mapbox/streets-v12',
           center: config.initialCenter,
-          zoom: config.initialZoom,
+          zoom: config.magnifiedInitialZoom,
           interactive: false
         });
         App.state.maps.after = afterMap;
         window.afterMap = afterMap;
         afterMap.on('style.load', () => {
-        console.log(' afterMap style fully loaded');
-        this.setupDataLayers(afterMap);
-        const hexStore = document.getElementById('hexbin-data-store');
-        const shotsStore = document.getElementById('shots-data-store');
-        const homStore = document.getElementById('homicides-data-store');
-        if (hexStore && hexStore._dashprivate_store) {
-          const hexData = hexStore._dashprivate_store.data;
-          const shotsData = shotsStore._dashprivate_store.data;
-          const homData = homStore._dashprivate_store.data;
-          if (hexData || shotsData || homData) {
+          console.log(' afterMap style fully loaded');
+          this.setupDataLayers(afterMap);
+          const hexStore = document.getElementById('hexbin-data-store');
+          const shotsStore = document.getElementById('shots-data-store');
+          const homStore = document.getElementById('homicides-data-store');
+          if (hexStore && hexStore._dashprivate_store) {
+            const hexData = hexStore._dashprivate_store.data;
+            const shotsData = shotsStore._dashprivate_store.data;
+            const homData = homStore._dashprivate_store.data;
+            if (hexData || shotsData || homData) {
               App.MapModule.updateMapData(hexData, shotsData, homData);
               console.log('♻️ Initial map data applied');
             }
@@ -113,53 +114,50 @@
        */
       setupEventHandlers(beforeMap, afterMap) {
         beforeMap.on('move', () => {
-            afterMap.jumpTo({
-                center: beforeMap.getCenter(),
-                zoom: beforeMap.getZoom(),
-                bearing: beforeMap.getBearing(),
-                pitch: beforeMap.getPitch()
-            });
+          afterMap.jumpTo({
+            center: beforeMap.getCenter(),
+            zoom: beforeMap.getZoom() + 1,
+            bearing: beforeMap.getBearing(),
+            pitch: beforeMap.getPitch()
+          });
         });
-    
+
         beforeMap.on('load', () => {
-          // Create a grayscale hexbin layer for background map
           beforeMap.addSource('hexDataBackground', {
-              type: 'geojson',
-              data: { type: 'FeatureCollection', features: [] }
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] }
           });
-          
           beforeMap.addLayer({
-              id: 'hexLayerBackground',
-              type: 'fill',
-              source: 'hexDataBackground',
-              paint: {
-                  'fill-color': [
-                      'interpolate', ['linear'], ['get', 'value'],
-                      0, 'rgba(0,0,0,0)',
-                      1, '#f5f5f5',  // Much lighter gray
-                      3, '#e0e0e0',  // Light gray
-                      5, '#c0c0c0',  // Medium gray
-                      7, '#a0a0a0',  // Darker gray
-                      10, '#808080'  // Darkest gray (but not too dark)
-                  ],
-                  'fill-opacity': 0.6,
-                  'fill-outline-color': 'rgba(200,200,200,0.4)'
-              }
+            id: 'hexLayerBackground',
+            type: 'fill',
+            source: 'hexDataBackground',
+            paint: {
+              'fill-color': [
+                'interpolate', ['linear'],
+                ['get', 'value'],
+                0, 'rgba(0,0,0,0)',
+                1, '#f5f5f5', // Much lighter gray
+                3, '#e0e0e0', // Light gray
+                5, '#c0c0c0', // Medium gray
+                7, '#a0a0a0', // Darker gray
+                10, '#808080' // Darkest gray (but not too dark)
+              ],
+              'fill-opacity': 0.6,
+              'fill-outline-color': 'rgba(200,200,200,0.4)'
+            }
           });
-          
           // Try to get background data immediately
           const bgStore = document.getElementById('hexbin-data-store-background');
           if (bgStore && bgStore._dashprivate_store && bgStore._dashprivate_store.data) {
-              const bgSource = beforeMap.getSource('hexDataBackground');
-              if (bgSource) {
-                  bgSource.setData(bgStore._dashprivate_store.data);
-                  console.log('Initial background map data applied');
-              }
+            const bgSource = beforeMap.getSource('hexDataBackground');
+            if (bgSource) {
+              bgSource.setData(bgStore._dashprivate_store.data);
+              console.log('Initial background map data applied');
+            }
           }
-      });
-        
+        });
         beforeMap.on('moveend', () => this.handleMapMoveEnd(beforeMap, afterMap));
-    },
+      },
 
       /**
        * Set up data layers on the visualization map
@@ -182,8 +180,9 @@
           paint: {
             'fill-color': [
               'case',
-              ['==', ['get', 'value'], null], '#cccccc', 
-              ['interpolate', ['linear'], ['get', 'value'],
+              ['==', ['get', 'value'], null], '#cccccc',
+              ['interpolate', ['linear'],
+                ['get', 'value'],
                 0, 'rgba(0,0,0,0)',
                 1, '#fdebcf',
                 5, '#f08e3e',
@@ -194,7 +193,7 @@
             'fill-opacity': 0.8,
             'fill-outline-color': 'rgba(255,255,255,0.6)'
           }
-          
+
         });
 
         map.addSource('shotsData', {
@@ -238,7 +237,7 @@
 
         App.state.maps.moveTimeout = setTimeout(() => {
           const center = beforeMap.getCenter();
-          const zoom = beforeMap.getZoom();
+          const zoom = beforeMap.getZoom() + 1;
           const features = afterMap.queryRenderedFeatures({ layers: ['hexLayer'] });
           const baseRad = 0.015 * Math.pow(2, 13 - zoom);
           const hexIDs = [];
@@ -458,7 +457,7 @@
           document.addEventListener('touchmove', handleDragMove, { passive: false });
           document.addEventListener('touchend', handleDragEnd);
         };
-      
+
         const handleDragMove = (event) => {
           if (!App.state.slider.isDragging &&
             event.type !== 'mousedown' &&
@@ -466,7 +465,7 @@
           event.preventDefault();
           this.handleDragMove(event);
         };
-      
+
         const handleDragEnd = () => {
           App.state.slider.isDragging = false;
           document.removeEventListener('mousemove', handleDragMove);
@@ -474,7 +473,7 @@
           document.removeEventListener('touchmove', handleDragMove);
           document.removeEventListener('touchend', handleDragEnd);
         };
-      
+
         elements.svg.addEventListener('mousedown', handleDragStart);
         elements.svg.addEventListener('touchstart', handleDragStart, { passive: false });
         const handleDateChange = () => {
@@ -487,7 +486,7 @@
             refreshBtn.click();
           }
         };
-        
+
         elements.handle.addEventListener('mouseup', handleDateChange);
         document.addEventListener('touchend', function(e) {
           if (App.state.slider.isDragging) {
@@ -513,7 +512,7 @@
         const { elements } = this;
         const config = App.config.slider;
         const state = App.state.slider;
-        const { center, startAngle, endAngle } = config; 
+        const { center, startAngle, endAngle } = config;
         const coords = this.utils.screenToSVGCoordinates(event, elements.svg);
         const dx = coords.x - center.x;
         const dy = coords.y - center.y;
@@ -530,7 +529,7 @@
           );
           angle = distToStart < distToEnd ? startAngle : endAngle;
         }
-      
+
         state.currentAngle = angle;
         state.currentDate = this.utils.angleToDate(angle);
 
@@ -561,7 +560,7 @@
           '#date-slider-value',
           '[id="date-slider-value"]'
         ];
-        
+
         let storeElement = null;
         for (const selector of selectors) {
           const element = document.querySelector(selector);
@@ -570,20 +569,20 @@
             break;
           }
         }
-        
+
         if (!storeElement) {
           console.warn("Could not find date-slider-value, will retry later");
           setTimeout(() => this.updateDateStore(dateValue), 500);
           return;
         }
-        
+
         storeElement.textContent = dateValue;
         const event = new CustomEvent("set-data", {
           detail: { data: dateValue }
         });
         storeElement.dispatchEvent(event);
         if (storeElement._dashprivate_setProps) {
-          storeElement._dashprivate_setProps({data: dateValue});
+          storeElement._dashprivate_setProps({ data: dateValue });
         }
 
         const updateBtn = document.getElementById('update-date-btn');
@@ -591,10 +590,10 @@
           updateBtn.setAttribute('data-date', dateValue);
           updateBtn.click();
         }
-        
+
         console.log(" Triggered Dash Store update for:", dateValue);
       },
-       
+
       /**
        * Utility functions for the slider
        */
@@ -712,7 +711,7 @@
 
           const clientX = event.clientX || (event.touches && event.touches[0].clientX);
           const clientY = event.clientY || (event.touches && event.touches[0].clientY);
-          const scaleFactor = svgRect.width / 600; 
+          const scaleFactor = svgRect.width / 600;
           return {
             x: (clientX - svgRect.left) / scaleFactor,
             y: (clientY - svgRect.top) / scaleFactor
@@ -737,79 +736,88 @@
       return '';
     },
 
-
+    /**
+     * Update map data sources with new GeoJSON data
+     */
     updateMapData: function(hexData, shotsData, homData) {
       console.log("Map update triggered with features:",
-          hexData ? (hexData.features ? hexData.features.length : 0) : "no data"
+        hexData ? (hexData.features ? hexData.features.length : 0) : "no data"
       );
-  
+
       function tryUpdateMap(attempts = 0) {
-          if (attempts >= 5) {
-              console.error("Failed to update map after multiple attempts");
-              return;
-          }
-  
-          const map = window.afterMap;
-          if (!map || !map.isStyleLoaded()) {
-              console.warn("afterMap or style not ready, retrying...");
-              setTimeout(() => tryUpdateMap(attempts + 1), 500);
-              return;
-          }
-          
-          console.log("Has hex layer?", map.getLayer("hexLayer"));  
-  
-          const ensureSource = (id) => {
-              const source = map.getSource(id);
-              if (!source) {
-                  console.warn(`Source '${id}' missing, setting up layers again`);
-                  if (window.App && App.MapModule && App.MapModule.setupDataLayers) {
-                      App.MapModule.setupDataLayers(map);
-                  }
-                  return map.getSource(id);
-              }
-              return source;
-          };
-  
-          const hexSource = ensureSource("hexData");
-          const shotsSource = ensureSource("shotsData");
-          const homSource = ensureSource("homicidesData");
-  
-          if (!hexSource || !shotsSource || !homSource) {
-              console.warn("Sources still missing, retrying...");
-              setTimeout(() => tryUpdateMap(attempts + 1), 500);
-              return;
-          }
-  
-          try {
-              if (hexData) {
+        if (attempts >= 5) {
+          console.error("Failed to update map after multiple attempts");
+          return;
+        }
 
-                  hexSource.setData(hexData);
-                  console.log("Updated front map hexbin data with", hexData.features.length, "features");
-              }
-              if (shotsData) {
-                  shotsSource.setData(shotsData);
-                  console.log("Updated shots data");
-              }
-              if (homData) {
-                  homSource.setData(homData);
-                  console.log("Updated homicides data");
-              }
-  
+        const map = window.afterMap;
+        if (!map || !map.isStyleLoaded()) {
+          console.warn("afterMap or style not ready, retrying...");
+          setTimeout(() => tryUpdateMap(attempts + 1), 500);
+          return;
+        }
 
-          } catch (err) {
-              console.error("Error updating map sources:", err);
-              setTimeout(() => tryUpdateMap(attempts + 1), 500);
+        console.log("Has hex layer?", map.getLayer("hexLayer"));
+
+        const ensureSource = (id) => {
+          const source = map.getSource(id);
+          if (!source) {
+            console.warn(`Source '${id}' missing, setting up layers again`);
+            if (window.App && App.MapModule && App.MapModule.setupDataLayers) {
+              App.MapModule.setupDataLayers(map);
+            }
+            return map.getSource(id);
           }
+          return source;
+        };
+
+        const hexSource = ensureSource("hexData");
+        const shotsSource = ensureSource("shotsData");
+        const homSource = ensureSource("homicidesData");
+
+        if (!hexSource || !shotsSource || !homSource) {
+          console.warn("Sources still missing, retrying...");
+          setTimeout(() => tryUpdateMap(attempts + 1), 500);
+          return;
+        }
+
+        try {
+          if (hexData) {
+            console.log("HexData[0]:", JSON.stringify(hexData.features[0], null, 2));
+
+            hexSource.setData(hexData);
+            console.log("Updated hexbin data with", hexData.features.length, "features");
+          }
+          if (shotsData) {
+            shotsSource.setData(shotsData);
+            console.log("Updated shots data");
+          }
+          if (homData) {
+            homSource.setData(homData);
+            console.log("Updated homicides data");
+          }
+
+          if (window.beforeMap && window.beforeMap.isStyleLoaded()) {
+            const bgSource = window.beforeMap.getSource("hexDataBackground");
+            if (bgSource && hexData) {
+              bgSource.setData(hexData);
+              console.log("Updated background map");
+            }
+          }
+        } catch (err) {
+          console.error("Error updating map sources:", err);
+          setTimeout(() => tryUpdateMap(attempts + 1), 500);
+        }
       }
-  
+
       tryUpdateMap();
       return '';
-  }
-    
+    }
+
   };
 
-  App.SliderModule.init         = App.SliderModule.init.bind(App.SliderModule);
-  App.SliderModule.setupSlider  = App.SliderModule.setupSlider.bind(App.SliderModule);
+  App.SliderModule.init = App.SliderModule.init.bind(App.SliderModule);
+  App.SliderModule.setupSlider = App.SliderModule.setupSlider.bind(App.SliderModule);
   App.SliderModule.drawSliderUI = App.SliderModule.drawSliderUI.bind(App.SliderModule);
   App.SliderModule.handleDragMove = App.SliderModule.handleDragMove.bind(App.SliderModule);
   App.init();
@@ -831,20 +839,19 @@ window.clientside = {
   },
 };
 
-
 window.clientside = {
   ...window.clientside,
   scrollChat: function(messages, containerId) {
     if (!messages) return {};
-    
-    
+
+
     setTimeout(() => {
       const chatContainer = document.getElementById(containerId);
       if (chatContainer) {
         chatContainer.scrollTop = chatContainer.scrollHeight;
       }
     }, 100);
-    
+
     return {};
   }
 };

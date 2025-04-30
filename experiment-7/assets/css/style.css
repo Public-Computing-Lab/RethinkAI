@@ -477,6 +477,53 @@ body {
     opacity: 1;
   }
 }
+/* ===============================
+   Pie Chart
+   =============================== */
+.interactive-indicator {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 3px 6px;
+  font-size: 0.7em;
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 4px;
+  color: #666;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.stats-visualization-container:hover .interactive-indicator {
+  opacity: 1;
+}
+
+/* Pie chart hover effects */
+#category-pie-chart .main-svg {
+  cursor: pointer;
+}
+
+#category-pie-chart path:hover {
+  opacity: 0.8;
+  stroke-width: 2px;
+  stroke: white;
+}
+
+/* Highlighted paragraph animation */
+@keyframes highlight-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(0, 0, 0, 0.1);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(0, 0, 0, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+  }
+}
+
+.highlighted-paragraph {
+  animation: highlight-pulse 2s infinite;
+}
 
 /* ===============================
    Two Column Layout

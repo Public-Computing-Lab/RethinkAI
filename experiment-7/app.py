@@ -334,13 +334,13 @@ def date_string_to_year_month(date_string):
         return 2024, 12
 
 
-def get_chat_response(prompt):
+def get_chat_response(prompt: str, structured_response: bool = False):
     try:
         headers = {
             "Content-Type": "application/json",
             "RethinkAI-API-Key": Config.RETHINKAI_API_KEY,
         }
-        response = requests.post(f"{Config.API_BASE_URL}/chat?request=experiment_6&app_version={Config.APP_VERSION}", headers=headers, json={"client_query": prompt})
+        response = requests.post(f"{Config.API_BASE_URL}/chat?request=experiment_7&app_version={Config.APP_VERSION}&structured_response={structured_response}", headers=headers, json={"client_query": prompt})
         response.raise_for_status()
         reply = response.json().get("response", "[No reply received]")
     except Exception as e:
@@ -644,58 +644,99 @@ app.clientside_callback(
 
 app.clientside_callback(
     """
-    function(n_clicks, current_date) {
-        if (!n_clicks) return;
-        
-        // Find all unprocessed bot messages
-        const botMessages = document.querySelectorAll('.bot-message:not([data-processed="true"])');
-        if (botMessages.length === 0) return;
-        
-        for (let message of botMessages) {
-            try {
-                // Create the collapsible structure
-                const wrapper = document.createElement('div');
-                wrapper.className = 'collapsible-response';
-                
-                const header = document.createElement('div');
-                header.className = 'collapsible-header expanded';
-                header.innerHTML = `<span class="date-label">${current_date}</span><span class="toggle-icon">▼</span>`;
-                
-                // Setup the toggle behavior
-                header.addEventListener('click', function() {
-                    this.classList.toggle('expanded');
-                    this.querySelector('.toggle-icon').textContent = 
-                        this.classList.contains('expanded') ? '▼' : '▶';
-                });
-                
-                // Extract the content from the message
-                const content = document.createElement('div');
-                content.className = 'collapsible-content';
-                
-                // Use innerHTML instead of node manipulation
-                content.innerHTML = message.innerHTML;
-                
-                // Mark as processed
-                message.setAttribute('data-processed', 'true');
-                
-                // Assemble and replace
-                wrapper.appendChild(header);
-                wrapper.appendChild(content);
-                
-                message.innerHTML = '';
-                message.appendChild(wrapper);
-                
-            } catch (err) {
-                console.error("Error creating collapsible:", err);
+    function(n_refresh, n_date, current_date) {
+      if (!n_refresh && !n_date) return '';
+
+      window.iwCounter = window.iwCounter || 0;
+      const msgs = document.querySelectorAll('.bot-message:not([data-processed="true"])');
+
+      msgs.forEach(msg => {
+        // wait for either <p> or our custom headers
+        if (!msg.querySelector('p') && !msg.querySelector('.llm-response-header')) return;
+        msg.setAttribute('data-processed', 'true');
+
+        // build the collapsible wrapper
+        const originalHTML = msg.innerHTML;
+        const wrapper  = document.createElement('div');
+        wrapper.className = 'collapsible-response';
+
+        // header (date vs number)
+        const isCom = !!msg.closest('#community-chat-container');
+        const label = isCom ? (++window.iwCounter) : current_date;
+        const header = document.createElement('div');
+        header.className = 'collapsible-header expanded';
+        header.innerHTML =
+          '<span class="date-label">' + label + '</span>' +
+          '<span class="toggle-icon">▼</span>';
+        header.addEventListener('click', function() {
+          this.classList.toggle('expanded');
+          const c = this.nextElementSibling;
+          c.style.display = c.style.display==='none' ? '' : 'none';
+          this.querySelector('.toggle-icon').textContent =
+            c.style.display==='none' ? '▶' : '▼';
+        });
+
+        // content container
+        const content = document.createElement('div');
+        content.className = 'collapsible-content';
+        content.innerHTML = originalHTML;
+
+        // ── CATEGORY COLORS ─────────────────────────────────────────
+        if (!isCom) {
+          // your four custom plus re-used burgundy for the fifth
+          const sliceColors = [
+            '#FFA95A',  // Living Conditions
+            '#6987C4',  // Trash
+            '#A9A9A9',  // Streets
+            '#701238',  // Parking
+            '#701238'   // Violent Crime
+          ];
+          const keys = [
+            'living-conditions',
+            'trash',
+            'streets',
+            'parking',
+            'violent-crime'
+          ];
+
+          keys.forEach((key, idx) => {
+            const container = content.querySelector('.llm-response-' + key);
+            if (!container) return;
+
+            // gather all nodes until next header
+            let node = container.nextSibling;
+            const toMove = [];
+            while (node && !(node.nodeType===1 && node.classList.contains('llm-response-header'))) {
+              toMove.push(node);
+              node = node.nextSibling;
             }
+            toMove.forEach(n => container.appendChild(n));
+
+            // apply your custom slice color at 10% opacity
+            const [r,g,b] = sliceColors[idx].match(/\\w\\w/g).map(h => parseInt(h,16));
+            container.style.backgroundColor = `rgba(${r},${g},${b},0.1)`;
+            container.style.padding = '0.5em';
+            container.style.borderRadius = '4px';
+            container.style.marginBottom = '0.5em';
+          });
         }
-        
-        return '';
+        // ─────────────────────────────────────────────────────────────
+
+        wrapper.appendChild(header);
+        wrapper.appendChild(content);
+        msg.innerHTML = '';
+        msg.appendChild(wrapper);
+      });
+
+      return '';
     }
     """,
     Output("loading-output", "children"),
-    [Input("refresh-chat-btn", "n_clicks")],
-    [State("current-date-store", "data")]
+    [
+      Input("refresh-chat-btn", "n_clicks"),
+      Input("update-date-btn",  "n_clicks")
+    ],
+    [ State("current-date-store", "data") ]
 )
 
 @app.callback(Output("slider-value-display", "children"), Input("date-slider-value", "children"))
@@ -782,7 +823,7 @@ def show_left_spinner_on_slider_change(slider_value):
     [
         State("chat-messages", "children"),
         State("selected-hexbins-store", "data"),
-        State("refresh-chat-btn", "n_clicks"),  # Add this state
+        State("refresh-chat-btn", "n_clicks"),  
     ],
     prevent_initial_call=True,
 )
@@ -791,15 +832,14 @@ def handle_chat_response(stored_input, slider_value, current_messages, selected_
     current_messages = current_messages or []
     year, month = date_string_to_year_month(slider_value)
     selected_date = f"{year}-{month:02d}"
-    prompt = f"Your neighbor has selected the date {selected_date} and wants to understand how the situation " f"in your neighborhood of Dorchester on {selected_date} compares to overall trends..."
+    prompt = f"response-type = analytic. Your neighbor has selected the date {selected_date} and wants to understand how the situation " f"in your neighborhood of Dorchester on {selected_date} compares to overall trends..."
     if selected_hexbins_data.get("selected_ids"):
         event_ids = ",".join(selected_hexbins_data["selected_ids"])
         event_id_data = get_select_311_data(event_ids=event_ids)
         event_date_data = get_select_311_data(event_date=selected_date)
         prompt += f"\n\nYour neighbor has specifically selected an area within Dorchester to examine. " f"The overall neighborhood 311 data on {selected_date} are: {event_date_data}. " f"The specific area 311 data are: {event_id_data}. Compare the local area data, the neighborhood-wide data, " f"and the overall trends in the original 311 data."
-    if stored_input:
-        prompt += f"\n\nThe neighbor asks: {stored_input}"
-    reply = get_chat_response(prompt)
+    
+    reply = get_chat_response(prompt=prompt, structured_response=True)
     bot_response = html.Div([dcc.Markdown(reply, dangerously_allow_html=True)], className="bot-message")
     updated_messages = current_messages + [bot_response]
     refresh_clicks = 0 if refresh_clicks is None else refresh_clicks + 1
@@ -852,7 +892,7 @@ def show_right_spinner_on_slider_change(slider_value):
     [
         State("chat-messages-right", "children"), 
         State("selected-hexbins-store", "data"),
-        State("refresh-chat-btn", "n_clicks"),  # Add this state
+        State("refresh-chat-btn", "n_clicks"),  
     ],
     prevent_initial_call=True,
 )
@@ -862,13 +902,11 @@ def handle_chat_response_right(stored_input, slider_value, msgs, selected, refre
     year, month = date_string_to_year_month(slider_value)
     selected_date = f"{year}-{month:02d}"
     if stored_input:
-        question = stored_input
+        prompt = f"response-type = mixed. Your neighbor wants community insights for {selected_date}. Based on the available data, provide insight in a direct and to-the-point manner to your neighbor's question: {stored_input}"
     else:
-        question = f"What were the main concerns in the community around {selected_date}?"
+        prompt = f"response-type = sentiment. What were the main concerns in the community around {selected_date}?"
 
-    prompt = f"Your neighbor wants community insights for {selected_date}. Based on meeting transcripts, what were the main concerns?\n\n{question}"
-
-    reply = get_chat_response(prompt)
+    reply = get_chat_response(prompt=prompt, structured_response=False)
 
     msgs.append(html.Div(dcc.Markdown(reply, dangerously_allow_html=True), className="bot-message"))
 
@@ -944,7 +982,7 @@ def complete_overlay_transition(n_intervals):
     ],
     [
         State("chat-messages", "children"),
-        State("refresh-chat-btn", "n_clicks"),  # Add this state
+        State("refresh-chat-btn", "n_clicks"),  
     ],
     prevent_initial_call=True,
 )
@@ -981,7 +1019,7 @@ def handle_tell_me_prompt(prompt, current_messages, refresh_clicks):
     ],
     [
         State("current-date-store", "data"),
-        State("refresh-chat-btn", "n_clicks"),  # Add this state
+        State("refresh-chat-btn", "n_clicks"),  
     ],
     prevent_initial_call=True,
 )
@@ -1007,14 +1045,13 @@ def handle_initial_prompts(n_clicks, selected, slider_value, refresh_clicks):
         if len(ids) > LIMIT:
             area_context += f"\n\nNote: This area had {len(ids)} events, but only {LIMIT} are analyzed due to system limits."
 
-    stats_prompt = f"Statistical overview for Dorchester on {selected_date}:{area_context} " "Your neighbor has selected this specific area to focus on. You don't have to compare the statistics but just analyze the data and give the statistics along with insights. Focus on counts of 311, shots fired, etc."
-    stats_reply = get_chat_response(stats_prompt)
-    stats_message = html.Div([html.Strong("Statistical overview for your neighborhood:"), dcc.Markdown(stats_reply, dangerously_allow_html=True)], className="bot-message")
+    stats_prompt = f"response-type = analytic. A by-the-numbers overview for Dorchester on {selected_date}:{area_context} " "Your neighbor has selected this specific area to focus on. You don't have to compare the statistics but just analyze the data and give the statistics along with insights. Focus on counts of 311, shots fired, etc."
+    stats_reply = get_chat_response(prompt=stats_prompt, structured_response=True)
+    stats_message = html.Div([html.Strong("A by-the-numbers overview of your neighborhood:"), dcc.Markdown(stats_reply, dangerously_allow_html=True)], className="bot-message")
 
-    community_prompt = f"Community meeting summary for {selected_date}:{area_context} " "Your neighbor has selected this specific area to focus on. Share ONLY qualitative quotes and concerns—do NOT include any statistics or counts."
-    community_reply = get_chat_response(community_prompt)
+    community_prompt = f"response-type = mixed. Community meeting summary for {selected_date}:{area_context} " "Your neighbor has selected this specific area to focus on. Share neighbor quotes and concerns."
+    community_reply = get_chat_response(prompt=community_prompt, structured_response=False)
     community_message = html.Div([html.Strong("From recent community meetings:"), dcc.Markdown(community_reply, dangerously_allow_html=True)], className="bot-message")
-
     refresh_clicks = 0 if refresh_clicks is None else refresh_clicks + 1
 
     return [stats_message], [community_message], refresh_clicks
@@ -1216,8 +1253,8 @@ def render_category_pie(counts):
     labels = list(counts.keys())
     values = list(counts.values())
     
-    # Custom color palette with light orange, sky blue, grey, and darker blue
-    custom_colors = ['#FFA95A', '#6AAFDB', '#A9A9A9', '#2C5F8E']
+ 
+    custom_colors = ['#FFA95A', '#6987C4', '#A9A9A9', '#701238']
     
     fig = go.Figure(data=[go.Pie(
         labels=labels, 
