@@ -1237,35 +1237,38 @@ def update_shot_count(selected, date_str):
     return count
 
 
-@app.callback(
+@callback(
     Output("category-pie-chart", "figure"),
     Input("area-category-counts-store", "data"),
 )
 def render_category_pie(counts):
-    if not counts:
-        return go.Figure(
-            layout={
-                "annotations": [
-                    {"text": "No data", "x":0.5, "y":0.5, "showarrow":False}
-                ]
-            }
-        )
+    # the actual labels coming in
     labels = list(counts.keys())
-    values = list(counts.values())
-    
- 
-    custom_colors = ['#FFA95A', '#6987C4', '#A9A9A9', '#701238']
-    
-    fig = go.Figure(data=[go.Pie(
-        labels=labels, 
-        values=values, 
-        hole=0.4, 
-        showlegend=False,
-        marker=dict(colors=custom_colors)
-    )])
-    
+    values = [counts[label] for label in labels]
+
+    # map each exact string to its color
+    color_map = {
+        "Streets, Sidewalks, And Parks": "#A9A9A9",
+        "Parking":                        "#701238",
+        "Living Conditions":             "#FFA95A",
+        "Trash, Recycling, And Waste":   "#6987C4",
+    }
+    # build the color list in the same order as labels
+    colors = [color_map.get(lbl, "#CCCCCC") for lbl in labels]
+
+    fig = go.Figure(
+        data=[go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.4,
+            sort=False,            # preserve order
+            marker=dict(colors=colors),
+            showlegend=False
+        )]
+    )
     fig.update_layout(margin={"l":0,"r":0,"t":0,"b":0})
     return fig
+
 
 @app.callback(
     Output("shots-count-display", "children"),

@@ -20,7 +20,7 @@
       mapbox: {
         token: window.MAPBOX_TOKEN,
         initialCenter: [-71.07601, 42.28988],
-        backgroundInitialZoom: 12,
+        backgroundInitialZoom: 13,
         magnifiedInitialZoom: 13
       },
       slider: {
@@ -116,7 +116,7 @@
         beforeMap.on('move', () => {
           afterMap.jumpTo({
             center: beforeMap.getCenter(),
-            zoom: beforeMap.getZoom() + 1,
+            zoom: beforeMap.getZoom(),
             bearing: beforeMap.getBearing(),
             pitch: beforeMap.getPitch()
           });
